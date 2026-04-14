@@ -15,7 +15,8 @@ import type {
   TokenUsage,
   ToolUseBlock,
 } from './types.js'
-import { classifyTurn } from './classifier.js'
+import { classifyTurn, BASH_TOOLS } from './classifier.js'
+import { extractBashCommands } from './bash-utils.js'
 
 function getClaudeDir(): string {
   return process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')
@@ -83,6 +84,15 @@ function extractCoreTools(tools: string[]): string[] {
   return tools.filter(t => !t.startsWith('mcp__'))
 }
 
+function extractBashCommandsFromContent(content: ContentBlock[]): string[] {
+  return content
+    .filter((b): b is ToolUseBlock => b.type === 'tool_use' && BASH_TOOLS.has((b as ToolUseBlock).name))
+    .flatMap(b => {
+      const command = (b.input as Record<string, unknown>)?.command
+      return typeof command === 'string' ? extractBashCommands(command) : []
+    })
+}
+
 function getUserMessageText(entry: JournalEntry): string {
   if (!entry.message || entry.message.role !== 'user') return ''
   const content = entry.message.content
@@ -127,6 +137,8 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     usage.speed ?? 'standard',
   )
 
+  const bashCmds = extractBashCommandsFromContent(msg.content ?? [])
+
   return {
     model: msg.model,
     usage: tokens,
@@ -137,6 +149,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     hasPlanMode: tools.includes('EnterPlanMode'),
     speed: usage.speed ?? 'standard',
     timestamp: entry.timestamp ?? '',
+    bashCommands: bashCmds,
   }
 }
 
@@ -193,6 +206,7 @@ function buildSessionSummary(
   const modelBreakdown: SessionSummary['modelBreakdown'] = {}
   const toolBreakdown: SessionSummary['toolBreakdown'] = {}
   const mcpBreakdown: SessionSummary['mcpBreakdown'] = {}
+  const bashBreakdown: SessionSummary['bashBreakdown'] = {}
   const categoryBreakdown: SessionSummary['categoryBreakdown'] = {} as SessionSummary['categoryBreakdown']
 
   let totalCost = 0
@@ -250,6 +264,10 @@ function buildSessionSummary(
         mcpBreakdown[server] = mcpBreakdown[server] ?? { calls: 0 }
         mcpBreakdown[server].calls++
       }
+      for (const cmd of call.bashCommands) {
+        bashBreakdown[cmd] = bashBreakdown[cmd] ?? { calls: 0 }
+        bashBreakdown[cmd].calls++
+      }
 
       if (!firstTs || call.timestamp < firstTs) firstTs = call.timestamp
       if (!lastTs || call.timestamp > lastTs) lastTs = call.timestamp
@@ -271,6 +289,7 @@ function buildSessionSummary(
     modelBreakdown,
     toolBreakdown,
     mcpBreakdown,
+    bashBreakdown,
     categoryBreakdown,
   }
 }

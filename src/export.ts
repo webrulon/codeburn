@@ -99,6 +99,20 @@ function buildToolRows(projects: ProjectSummary[]): Array<Record<string, string 
     .map(([tool, calls]) => ({ Tool: tool, Calls: calls }))
 }
 
+function buildBashRows(projects: ProjectSummary[]): Array<Record<string, string | number>> {
+  const bashTotals: Record<string, number> = {}
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [cmd, d] of Object.entries(session.bashBreakdown)) {
+        bashTotals[cmd] = (bashTotals[cmd] ?? 0) + d.calls
+      }
+    }
+  }
+  return Object.entries(bashTotals)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cmd, calls]) => ({ Command: cmd, Calls: calls }))
+}
+
 function buildProjectRows(projects: ProjectSummary[]): Array<Record<string, string | number>> {
   return projects.map(p => ({
     Project: p.projectPath,
@@ -158,6 +172,10 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   parts.push(rowsToCsv(buildToolRows(allProjects)))
   parts.push('')
 
+  parts.push('# Shell Commands - All')
+  parts.push(rowsToCsv(buildBashRows(allProjects)))
+  parts.push('')
+
   parts.push('# Projects - All')
   parts.push(rowsToCsv(buildProjectRows(allProjects)))
   parts.push('')
@@ -185,6 +203,7 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     generated: new Date().toISOString(),
     periods: periodData,
     tools: buildToolRows(allProjects),
+    shellCommands: buildBashRows(allProjects),
     projects: buildProjectRows(allProjects),
   }
 
