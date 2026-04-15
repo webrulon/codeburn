@@ -19,7 +19,7 @@
   <img src="https://raw.githubusercontent.com/AgentSeal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), and **Cursor** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. macOS menu bar widget via SwiftBar. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, and **OpenCode** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. macOS menu bar widget via SwiftBar. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -38,8 +38,8 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), and/or Cursor
-- For Cursor support: `better-sqlite3` is installed automatically as an optional dependency
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, and/or OpenCode
+- For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
 
@@ -64,9 +64,10 @@ CodeBurn auto-detects which AI coding tools you use. If multiple providers have 
 ```bash
 codeburn report                    # all providers combined (default)
 codeburn report --provider claude  # Claude Code only
-codeburn report --provider codex   # Codex only
-codeburn report --provider cursor  # Cursor only
-codeburn today --provider codex    # Codex today
+codeburn report --provider codex     # Codex only
+codeburn report --provider cursor   # Cursor only
+codeburn report --provider opencode # OpenCode only
+codeburn today --provider codex     # Codex today
 codeburn export --provider claude  # export Claude data only
 ```
 
@@ -80,7 +81,8 @@ The `--provider` flag works on all commands: `report`, `today`, `month`, `status
 | Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
 | Codex (OpenAI) | `~/.codex/sessions/` | Supported |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
-| Pi, OpenCode, Amp | -- | Planned (provider plugin system) |
+| OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
+| Pi, Amp | -- | Planned (provider plugin system) |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
 
@@ -153,7 +155,9 @@ Requires [SwiftBar](https://github.com/swiftbar/SwiftBar) (`brew install --cask 
 
 **Cursor** stores session data in a SQLite database at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (macOS), `~/.config/Cursor/User/globalStorage/state.vscdb` (Linux), or `%APPDATA%/Cursor/User/globalStorage/state.vscdb` (Windows). Token counts are in `cursorDiskKV` table entries with `bubbleId:` key prefix. Requires `better-sqlite3` (installed as optional dependency). Parsed results are cached at `~/.cache/codeburn/cursor-results.json` and auto-invalidate when the database changes.
 
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor), filters by date range per entry, and classifies each turn.
+**OpenCode** stores sessions in SQLite databases at `~/.local/share/opencode/opencode*.db`. CodeBurn queries the `session`, `message`, and `part` tables read-only, extracts token counts and tool usage, and recalculates cost using the LiteLLM pricing engine. Falls back to OpenCode's own cost field for models not in our pricing data. Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double-counting. Supports multiple channel databases and respects `XDG_DATA_HOME`.
+
+CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
@@ -181,10 +185,11 @@ src/
   cursor-cache.ts Cursor result cache (file-based, auto-invalidating)
   providers/
     types.ts      Provider interface definitions
-    index.ts      Provider registry (lazy-loads Cursor)
+    index.ts      Provider registry (lazy-loads Cursor, OpenCode)
     claude.ts     Claude Code session discovery
     codex.ts      Codex session discovery and JSONL parsing
     cursor.ts     Cursor SQLite parsing, language extraction
+    opencode.ts   OpenCode SQLite session discovery and parsing
 ```
 
 ## License
