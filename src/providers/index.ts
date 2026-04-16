@@ -1,5 +1,6 @@
 import { claude } from './claude.js'
 import { codex } from './codex.js'
+import { pi } from './pi.js'
 import type { Provider, SessionSource } from './types.js'
 
 let cursorProvider: Provider | null = null
@@ -32,7 +33,7 @@ async function loadOpenCode(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, codex]
+const coreProviders: Provider[] = [claude, codex, pi]
 
 export async function getAllProviders(): Promise<Provider[]> {
   const [cursor, opencode] = await Promise.all([loadCursor(), loadOpenCode()])
@@ -68,4 +69,3 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   }
   return coreProviders.find(p => p.name === name)
 }
-

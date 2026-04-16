@@ -48,6 +48,8 @@ const PROVIDER_COLORS: Record<string, string> = {
   claude: '#FF8C42',
   codex: '#5BF5A0',
   cursor: '#00B4D8',
+  opencode: '#A78BFA',
+  pi: '#F472B6',
   all: '#FF8C42',
 }
 
@@ -427,6 +429,8 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   claude: 'Claude',
   codex: 'Codex',
   cursor: 'Cursor',
+  opencode: 'OpenCode',
+  pi: 'Pi',
 }
 
 function getProviderDisplayName(name: string): string {
