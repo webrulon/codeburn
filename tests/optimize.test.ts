@@ -8,6 +8,7 @@ import {
   detectBloatedClaudeMd,
   detectMissingClaudeignore,
   computeHealth,
+  computeTrend,
   type ToolCall,
   type ApiCallMeta,
   type WasteFinding,
@@ -254,5 +255,57 @@ describe('computeHealth', () => {
     expect(computeHealth([mockFinding('medium'), mockFinding('medium')]).grade).toBe('B')
     expect(computeHealth([mockFinding('high'), mockFinding('high'), mockFinding('high')]).grade).toBe('C')
     expect(computeHealth([mockFinding('high'), mockFinding('high'), mockFinding('high'), mockFinding('high'), mockFinding('high')]).grade).toBe('F')
+  })
+})
+
+describe('computeTrend', () => {
+  const window = 48 * 60 * 60 * 1000
+  const baselineWindow = 5 * 24 * 60 * 60 * 1000
+
+  it('returns active when no recent activity detected', () => {
+    const trend = computeTrend({
+      recentCount: 0, recentWindowMs: window,
+      baselineCount: 100, baselineWindowMs: baselineWindow,
+      hasRecentActivity: false,
+    })
+    expect(trend).toBe('active')
+  })
+
+  it('returns resolved when recent activity exists but zero waste in it', () => {
+    const trend = computeTrend({
+      recentCount: 0, recentWindowMs: window,
+      baselineCount: 100, baselineWindowMs: baselineWindow,
+      hasRecentActivity: true,
+    })
+    expect(trend).toBe('resolved')
+  })
+
+  it('returns improving when recent rate is less than half of baseline rate', () => {
+    const trend = computeTrend({
+      recentCount: 5, recentWindowMs: window,
+      baselineCount: 100, baselineWindowMs: baselineWindow,
+      hasRecentActivity: true,
+    })
+    expect(trend).toBe('improving')
+  })
+
+  it('returns active when recent rate matches baseline rate', () => {
+    const recentRate = 100 / baselineWindow
+    const recentCount = Math.ceil(recentRate * window)
+    const trend = computeTrend({
+      recentCount, recentWindowMs: window,
+      baselineCount: 100, baselineWindowMs: baselineWindow,
+      hasRecentActivity: true,
+    })
+    expect(trend).toBe('active')
+  })
+
+  it('returns active when baseline is empty (new finding)', () => {
+    const trend = computeTrend({
+      recentCount: 10, recentWindowMs: window,
+      baselineCount: 0, baselineWindowMs: baselineWindow,
+      hasRecentActivity: true,
+    })
+    expect(trend).toBe('active')
   })
 })

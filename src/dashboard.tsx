@@ -459,9 +459,15 @@ function FindingPanel({ index, finding, costRate, width }: { index: number; find
   const costSaved = finding.tokensSaved * costRate
   const color = IMPACT_PANEL_COLORS[finding.impact] ?? DIM
   const label = finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)
+  const trendBadge = finding.trend === 'improving' ? ' improving \u2193' : ''
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width}>
-      <Text wrap="truncate-end"><Text bold>{index}. {finding.title}</Text>  <Text color={color}>{label}</Text></Text>
+      <Text wrap="truncate-end">
+        <Text bold>{index}. {finding.title}</Text>
+        <Text>  </Text>
+        <Text color={color}>{label}</Text>
+        {trendBadge && <Text color="#5BF5A0">{trendBadge}</Text>}
+      </Text>
       <Text dimColor wrap="wrap">{finding.explanation}</Text>
       <Text color={GOLD}>Savings: ~{formatTokens(finding.tokensSaved)} tokens (~{formatCost(costSaved)})</Text>
       <Text> </Text>

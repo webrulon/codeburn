@@ -108,12 +108,15 @@ export type WasteAction =
   | { type: 'command'; label: string; text: string }
   | { type: 'file-content'; label: string; path: string; content: string }
 
+export type Trend = 'active' | 'improving'
+
 export type WasteFinding = {
   title: string
   explanation: string
   impact: Impact
   tokensSaved: number
   fix: WasteAction
+  trend?: Trend
 }
 
 export type OptimizeResult = {
@@ -128,11 +131,13 @@ export type ToolCall = {
   input: Record<string, unknown>
   sessionId: string
   project: string
+  recent?: boolean
 }
 
 export type ApiCallMeta = {
   cacheCreationTokens: number
   version: string
+  recent?: boolean
 }
 
 type ScanData = {
@@ -149,6 +154,9 @@ type ScanData = {
 
 const FILE_READ_CONCURRENCY = 16
 const RESULT_CACHE_TTL_MS = 60_000
+const RECENT_WINDOW_HOURS = 48
+const RECENT_WINDOW_MS = RECENT_WINDOW_HOURS * 60 * 60 * 1000
+const IMPROVING_THRESHOLD = 0.5
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   const files = await readdir(dirPath).catch(() => [])
@@ -202,10 +210,16 @@ function inRange(timestamp: string | undefined, range: DateRange | undefined): b
   return ts >= range.start && ts <= range.end
 }
 
+function isRecent(timestamp: string | undefined, cutoff: number): boolean {
+  if (!timestamp) return false
+  return new Date(timestamp).getTime() >= cutoff
+}
+
 export async function scanJsonlFile(
   filePath: string,
   project: string,
   dateRange: DateRange | undefined,
+  recentCutoffMs = Date.now() - RECENT_WINDOW_MS,
 ): Promise<ScanFileResult> {
   let content: string
   try {
@@ -229,6 +243,7 @@ export async function scanJsonlFile(
 
     const ts = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
     const withinRange = inRange(ts, dateRange)
+    const recent = isRecent(ts, recentCutoffMs)
 
     if (entry.cwd && typeof entry.cwd === 'string' && withinRange) cwds.push(entry.cwd)
     if (entry.version && typeof entry.version === 'string' && withinRange) versions.push(entry.version)
@@ -256,7 +271,7 @@ export async function scanJsonlFile(
     const usage = msg?.usage as Record<string, unknown> | undefined
     if (usage) {
       const cacheCreate = (usage.cache_creation_input_tokens as number) ?? 0
-      if (cacheCreate > 0) apiCalls.push({ cacheCreationTokens: cacheCreate, version: lastVersion })
+      if (cacheCreate > 0) apiCalls.push({ cacheCreationTokens: cacheCreate, version: lastVersion, recent })
     }
 
     const blocks = msg?.content
@@ -269,6 +284,7 @@ export async function scanJsonlFile(
         input: (block.input as Record<string, unknown>) ?? {},
         sessionId,
         project,
+        recent,
       })
     }
   }
@@ -358,15 +374,17 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
 // Detectors
 // ============================================================================
 
-export function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
+export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): WasteFinding | null {
   const dirCounts = new Map<string, number>()
   let totalJunkReads = 0
+  let recentJunkReads = 0
 
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
     const filePath = call.input.file_path as string | undefined
     if (!filePath || !JUNK_PATTERN.test(filePath)) continue
     totalJunkReads++
+    if (call.recent) recentJunkReads++
     for (const dir of JUNK_DIRS) {
       if (filePath.includes(`/${dir}/`)) {
         dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1)
@@ -376,6 +394,10 @@ export function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
   }
 
   if (totalJunkReads < MIN_JUNK_READS_TO_FLAG) return null
+
+  const hasRecentActivity = calls.some(c => c.recent)
+  const trend = sessionTrend(recentJunkReads, totalJunkReads, dateRange, hasRecentActivity)
+  if (trend === 'resolved') return null
 
   const sorted = [...dirCounts.entries()].sort((a, b) => b[1] - a[1])
   const dirList = sorted.slice(0, 3).map(([d, n]) => `${d}/ (${n}x)`).join(', ')
@@ -397,11 +419,12 @@ export function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
       path: '.claudeignore',
       content: ignoreContent,
     },
+    trend,
   }
 }
 
-export function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
-  const sessionFiles = new Map<string, Map<string, number>>()
+export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): WasteFinding | null {
+  const sessionFiles = new Map<string, Map<string, { count: number; recent: number }>>()
 
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
@@ -410,23 +433,32 @@ export function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
     const key = `${call.project}:${call.sessionId}`
     if (!sessionFiles.has(key)) sessionFiles.set(key, new Map())
     const fm = sessionFiles.get(key)!
-    fm.set(filePath, (fm.get(filePath) ?? 0) + 1)
+    const entry = fm.get(filePath) ?? { count: 0, recent: 0 }
+    entry.count++
+    if (call.recent) entry.recent++
+    fm.set(filePath, entry)
   }
 
   let totalDuplicates = 0
+  let recentDuplicates = 0
   const fileDupes = new Map<string, number>()
 
   for (const fm of sessionFiles.values()) {
-    for (const [file, count] of fm) {
-      if (count <= 1) continue
-      const extra = count - 1
+    for (const [file, entry] of fm) {
+      if (entry.count <= 1) continue
+      const extra = entry.count - 1
       totalDuplicates += extra
+      if (entry.recent > 1) recentDuplicates += entry.recent - 1
       const name = basename(file)
       fileDupes.set(name, (fileDupes.get(name) ?? 0) + extra)
     }
   }
 
   if (totalDuplicates < MIN_DUPLICATE_READS_TO_FLAG) return null
+
+  const hasRecentActivity = calls.some(c => c.recent)
+  const trend = sessionTrend(recentDuplicates, totalDuplicates, dateRange, hasRecentActivity)
+  if (trend === 'resolved') return null
 
   const worst = [...fileDupes.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -446,6 +478,7 @@ export function detectDuplicateReads(calls: ToolCall[]): WasteFinding | null {
       label: 'Point Claude at exact locations in your prompt, for example:',
       text: 'In <file> lines <start>-<end>, look at the <function> function.',
     },
+    trend,
   }
 }
 
@@ -599,12 +632,19 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
 const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
 const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
 
-export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
+export function detectLowReadEditRatio(calls: ToolCall[], dateRange?: DateRange): WasteFinding | null {
   let reads = 0
   let edits = 0
+  let recentEdits = 0
+  let recentReads = 0
   for (const call of calls) {
-    if (READ_TOOL_NAMES.has(call.name)) reads++
-    else if (EDIT_TOOL_NAMES.has(call.name)) edits++
+    if (READ_TOOL_NAMES.has(call.name)) {
+      reads++
+      if (call.recent) recentReads++
+    } else if (EDIT_TOOL_NAMES.has(call.name)) {
+      edits++
+      if (call.recent) recentEdits++
+    }
   }
 
   if (edits < MIN_EDITS_FOR_RATIO) return null
@@ -614,6 +654,14 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   const impact: Impact = ratio < LOW_RATIO_HIGH_THRESHOLD ? 'high' : ratio < LOW_RATIO_MEDIUM_THRESHOLD ? 'medium' : 'low'
   const extraReadsNeeded = Math.max(Math.round(edits * HEALTHY_READ_EDIT_RATIO) - reads, 0)
   const tokensSaved = extraReadsNeeded * AVG_TOKENS_PER_READ
+
+  let trend: Trend | 'resolved' = 'active'
+  if (recentEdits >= MIN_EDITS_FOR_RATIO) {
+    const recentRatio = recentReads / recentEdits
+    if (recentRatio >= HEALTHY_READ_EDIT_RATIO) trend = 'resolved'
+    else if (recentRatio > ratio * (1 / IMPROVING_THRESHOLD)) trend = 'improving'
+  }
+  if (trend === 'resolved') return null
 
   return {
     title: 'Claude edits more than it reads',
@@ -625,6 +673,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
       label: 'Add to your CLAUDE.md:',
       text: 'Before editing any file, read it first. Before modifying a function, grep for all callers. Research before you edit.',
     },
+    trend,
   }
 }
 
@@ -637,15 +686,23 @@ function computeBudgetAwareCacheBaseline(projects: ProjectSummary[]): number {
   return sorted[Math.floor(sorted.length * 0.25)] || 50_000
 }
 
-export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSummary[]): WasteFinding | null {
+const CACHE_BLOAT_MULTIPLIER = 1.4
+
+export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSummary[], dateRange?: DateRange): WasteFinding | null {
   if (apiCalls.length < MIN_API_CALLS_FOR_CACHE) return null
 
   const sorted = apiCalls.map(c => c.cacheCreationTokens).sort((a, b) => a - b)
   const median = sorted[Math.floor(sorted.length / 2)]
   const baseline = computeBudgetAwareCacheBaseline(projects)
-  const bloatThreshold = baseline * 1.4
+  const bloatThreshold = baseline * CACHE_BLOAT_MULTIPLIER
 
   if (median < bloatThreshold) return null
+
+  const recentCalls = apiCalls.filter(c => c.recent)
+  const totalBloated = apiCalls.filter(c => c.cacheCreationTokens > bloatThreshold).length
+  const recentBloated = recentCalls.filter(c => c.cacheCreationTokens > bloatThreshold).length
+  const trend = sessionTrend(recentBloated, totalBloated, dateRange, recentCalls.length > 0)
+  if (trend === 'resolved') return null
 
   const versionCounts = new Map<string, { total: number; count: number }>()
   for (const call of apiCalls) {
@@ -682,6 +739,7 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
       label: 'Check for recent Claude Code updates or heavy MCP/skill additions. As a workaround (not officially supported):',
       text: 'export ANTHROPIC_CUSTOM_HEADERS=\'User-Agent: claude-cli/2.1.98 (external, sdk-cli)\'',
     },
+    trend,
   }
 }
 
@@ -864,6 +922,46 @@ function urgencyScore(f: WasteFinding): number {
   return URGENCY_WEIGHTS[f.impact] * URGENCY_IMPACT_WEIGHT + normalizedTokens * URGENCY_TOKEN_WEIGHT
 }
 
+type TrendInputs = {
+  recentCount: number
+  recentWindowMs: number
+  baselineCount: number
+  baselineWindowMs: number
+  hasRecentActivity: boolean
+}
+
+export function computeTrend(inputs: TrendInputs): Trend | 'resolved' {
+  const { recentCount, recentWindowMs, baselineCount, baselineWindowMs, hasRecentActivity } = inputs
+  if (baselineCount === 0) return 'active'
+  if (recentCount === 0 && hasRecentActivity) return 'resolved'
+  if (!hasRecentActivity) return 'active'
+  const baselineRate = baselineCount / baselineWindowMs
+  const recentRate = recentCount / Math.max(recentWindowMs, 1)
+  if (recentRate < baselineRate * IMPROVING_THRESHOLD) return 'improving'
+  return 'active'
+}
+
+function sessionTrend(
+  recentItemCount: number,
+  totalItemCount: number,
+  dateRange: DateRange | undefined,
+  hasRecentActivity: boolean,
+): Trend | 'resolved' {
+  const now = Date.now()
+  const baselineCount = totalItemCount - recentItemCount
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
+  const periodStart = dateRange ? dateRange.start.getTime() : now - thirtyDaysMs
+  const recentStart = now - RECENT_WINDOW_MS
+  const baselineWindowMs = Math.max(recentStart - periodStart, 1)
+  return computeTrend({
+    recentCount: recentItemCount,
+    recentWindowMs: RECENT_WINDOW_MS,
+    baselineCount,
+    baselineWindowMs,
+    hasRecentActivity,
+  })
+}
+
 // ============================================================================
 // Cost estimation
 // ============================================================================
@@ -910,10 +1008,10 @@ export async function scanAndDetect(
 
   const findings: WasteFinding[] = []
   const syncDetectors: Array<() => WasteFinding | null> = [
-    () => detectCacheBloat(apiCalls, projects),
-    () => detectLowReadEditRatio(toolCalls),
-    () => detectJunkReads(toolCalls),
-    () => detectDuplicateReads(toolCalls),
+    () => detectCacheBloat(apiCalls, projects, dateRange),
+    () => detectLowReadEditRatio(toolCalls, dateRange),
+    () => detectJunkReads(toolCalls, dateRange),
+    () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds),
     () => detectMissingClaudeignore(projectCwds),
     () => detectBloatedClaudeMd(projectCwds),
@@ -967,14 +1065,16 @@ function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
   const lines: string[] = []
   const costSaved = f.tokensSaved * costRate
   const impactLabel = f.impact.charAt(0).toUpperCase() + f.impact.slice(1)
+  const trendBadge = f.trend === 'improving' ? ' improving \u2193 ' : ''
   const savings = `~${formatTokens(f.tokensSaved)} tokens (~${formatCost(costSaved)})`
-  const titlePad = PANEL_WIDTH - f.title.length - impactLabel.length - 8
+  const titlePad = PANEL_WIDTH - f.title.length - impactLabel.length - trendBadge.length - 8
   const pad = titlePad > 0 ? ' ' + SEP.repeat(titlePad) + ' ' : '  '
 
   lines.push(chalk.hex(DIM)(`  ${SEP}${SEP}${SEP} `) +
     chalk.bold(`${n}. ${f.title}`) +
     chalk.hex(DIM)(pad) +
     chalk.hex(IMPACT_COLORS[f.impact])(impactLabel) +
+    (trendBadge ? chalk.hex(GREEN)(trendBadge) : '') +
     chalk.hex(DIM)(` ${SEP}${SEP}${SEP}`))
   lines.push('')
   lines.push(wrap(f.explanation, PANEL_WIDTH - 4, '  '))
