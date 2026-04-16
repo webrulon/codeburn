@@ -155,6 +155,8 @@ const FILE_READ_CONCURRENCY = 16
 const RESULT_CACHE_TTL_MS = 60_000
 const RECENT_WINDOW_HOURS = 48
 const RECENT_WINDOW_MS = RECENT_WINDOW_HOURS * 60 * 60 * 1000
+const DEFAULT_TREND_PERIOD_DAYS = 30
+const DEFAULT_TREND_PERIOD_MS = DEFAULT_TREND_PERIOD_DAYS * 24 * 60 * 60 * 1000
 const IMPROVING_THRESHOLD = 0.5
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -947,8 +949,7 @@ function sessionTrend(
 ): Trend | 'resolved' {
   const now = Date.now()
   const baselineCount = totalItemCount - recentItemCount
-  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
-  const periodStart = dateRange ? dateRange.start.getTime() : now - thirtyDaysMs
+  const periodStart = dateRange ? dateRange.start.getTime() : now - DEFAULT_TREND_PERIOD_MS
   const recentStart = now - RECENT_WINDOW_MS
   const baselineWindowMs = Math.max(recentStart - periodStart, 1)
   return computeTrend({
