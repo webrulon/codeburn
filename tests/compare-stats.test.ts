@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aggregateModelStats, type ModelStats } from '../src/compare-stats.js'
+import { aggregateModelStats, computeComparison, type ModelStats } from '../src/compare-stats.js'
 import type { ProjectSummary, SessionSummary, ClassifiedTurn } from '../src/types.js'
 
 function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retries?: number; outputTokens?: number; inputTokens?: number; cacheRead?: number; cacheWrite?: number; timestamp?: string } = {}): ClassifiedTurn {
@@ -133,5 +133,79 @@ describe('aggregateModelStats', () => {
     const stats = aggregateModelStats([project])
     expect(stats[0].model).toBe('expensive-model')
     expect(stats[1].model).toBe('cheap-model')
+  })
+})
+
+function makeStats(overrides: Partial<ModelStats> = {}): ModelStats {
+  return {
+    model: 'test-model',
+    calls: 100,
+    cost: 10,
+    outputTokens: 50000,
+    inputTokens: 10000,
+    cacheReadTokens: 20000,
+    cacheWriteTokens: 5000,
+    totalTurns: 200,
+    editTurns: 80,
+    oneShotTurns: 60,
+    retries: 20,
+    selfCorrections: 10,
+    firstSeen: '2026-04-01T00:00:00Z',
+    lastSeen: '2026-04-15T00:00:00Z',
+    ...overrides,
+  }
+}
+
+describe('computeComparison', () => {
+  it('computes normalized metrics and picks winners correctly', () => {
+    const a = makeStats({ calls: 100, cost: 10, outputTokens: 50000, inputTokens: 10000, cacheReadTokens: 20000, cacheWriteTokens: 5000, editTurns: 80, oneShotTurns: 60, retries: 20, selfCorrections: 10, totalTurns: 200 })
+    const b = makeStats({ calls: 100, cost: 8, outputTokens: 40000, inputTokens: 10000, cacheReadTokens: 20000, cacheWriteTokens: 5000, editTurns: 80, oneShotTurns: 60, retries: 20, selfCorrections: 10, totalTurns: 200 })
+    const rows = computeComparison(a, b)
+
+    const costRow = rows.find(r => r.label === 'Cost / call')!
+    expect(costRow.valueA).toBeCloseTo(0.1)
+    expect(costRow.valueB).toBeCloseTo(0.08)
+    expect(costRow.winner).toBe('b')
+
+    const outputRow = rows.find(r => r.label === 'Output tok / call')!
+    expect(outputRow.valueA).toBe(500)
+    expect(outputRow.valueB).toBe(400)
+    expect(outputRow.winner).toBe('b')
+  })
+
+  it('returns null values for one-shot rate and retry rate when editTurns is zero', () => {
+    const a = makeStats({ editTurns: 0, oneShotTurns: 0, retries: 0 })
+    const b = makeStats({ editTurns: 80, oneShotTurns: 60, retries: 20 })
+    const rows = computeComparison(a, b)
+
+    const oneShotRow = rows.find(r => r.label === 'One-shot rate')!
+    expect(oneShotRow.valueA).toBeNull()
+    expect(oneShotRow.winner).toBe('none')
+
+    const retryRow = rows.find(r => r.label === 'Retry rate')!
+    expect(retryRow.valueA).toBeNull()
+    expect(retryRow.winner).toBe('none')
+  })
+
+  it('returns tie when values are equal', () => {
+    const a = makeStats({ calls: 100, cost: 10 })
+    const b = makeStats({ calls: 100, cost: 10 })
+    const rows = computeComparison(a, b)
+
+    const costRow = rows.find(r => r.label === 'Cost / call')!
+    expect(costRow.winner).toBe('tie')
+  })
+
+  it('picks higher value as winner for cache hit rate', () => {
+    const a = makeStats({ inputTokens: 5000, cacheReadTokens: 30000, cacheWriteTokens: 5000 })
+    const b = makeStats({ inputTokens: 10000, cacheReadTokens: 10000, cacheWriteTokens: 5000 })
+    const rows = computeComparison(a, b)
+
+    const cacheRow = rows.find(r => r.label === 'Cache hit rate')!
+    const totalA = 5000 + 30000 + 5000
+    const totalB = 10000 + 10000 + 5000
+    expect(cacheRow.valueA).toBeCloseTo(30000 / totalA * 100)
+    expect(cacheRow.valueB).toBeCloseTo(10000 / totalB * 100)
+    expect(cacheRow.winner).toBe('a')
   })
 })

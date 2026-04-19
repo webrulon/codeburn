@@ -61,3 +61,81 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
 
   return [...byModel.values()].sort((a, b) => b.cost - a.cost)
 }
+
+export type ComparisonRow = {
+  label: string
+  valueA: number | null
+  valueB: number | null
+  formatFn: 'cost' | 'number' | 'percent' | 'decimal'
+  winner: 'a' | 'b' | 'tie' | 'none'
+}
+
+type MetricDef = {
+  label: string
+  formatFn: ComparisonRow['formatFn']
+  higherIsBetter: boolean
+  compute: (s: ModelStats) => number | null
+}
+
+const METRICS: MetricDef[] = [
+  {
+    label: 'Cost / call',
+    formatFn: 'cost',
+    higherIsBetter: false,
+    compute: s => s.calls > 0 ? s.cost / s.calls : null,
+  },
+  {
+    label: 'Output tok / call',
+    formatFn: 'number',
+    higherIsBetter: false,
+    compute: s => s.calls > 0 ? Math.round(s.outputTokens / s.calls) : null,
+  },
+  {
+    label: 'Cache hit rate',
+    formatFn: 'percent',
+    higherIsBetter: true,
+    compute: s => {
+      const total = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens
+      return total > 0 ? (s.cacheReadTokens / total) * 100 : null
+    },
+  },
+  {
+    label: 'One-shot rate',
+    formatFn: 'percent',
+    higherIsBetter: true,
+    compute: s => s.editTurns > 0 ? (s.oneShotTurns / s.editTurns) * 100 : null,
+  },
+  {
+    label: 'Retry rate',
+    formatFn: 'decimal',
+    higherIsBetter: false,
+    compute: s => s.editTurns > 0 ? s.retries / s.editTurns : null,
+  },
+  {
+    label: 'Self-correction',
+    formatFn: 'percent',
+    higherIsBetter: false,
+    compute: s => s.totalTurns > 0 ? (s.selfCorrections / s.totalTurns) * 100 : null,
+  },
+]
+
+function pickWinner(valueA: number | null, valueB: number | null, higherIsBetter: boolean): ComparisonRow['winner'] {
+  if (valueA === null || valueB === null) return 'none'
+  if (valueA === valueB) return 'tie'
+  if (higherIsBetter) return valueA > valueB ? 'a' : 'b'
+  return valueA < valueB ? 'a' : 'b'
+}
+
+export function computeComparison(a: ModelStats, b: ModelStats): ComparisonRow[] {
+  return METRICS.map(m => {
+    const valueA = m.compute(a)
+    const valueB = m.compute(b)
+    return {
+      label: m.label,
+      valueA,
+      valueB,
+      formatFn: m.formatFn,
+      winner: pickWinner(valueA, valueB, m.higherIsBetter),
+    }
+  })
+}
