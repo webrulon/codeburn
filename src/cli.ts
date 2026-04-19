@@ -247,7 +247,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
     let customRange: DateRange | null = null
     try {
@@ -502,7 +502,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
@@ -518,7 +518,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)

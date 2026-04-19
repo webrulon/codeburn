@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Observation
 
-private let refreshIntervalSeconds: UInt64 = 60
+private let refreshIntervalSeconds: UInt64 = 15
 private let nanosPerSecond: UInt64 = 1_000_000_000
 private let refreshIntervalNanos: UInt64 = refreshIntervalSeconds * nanosPerSecond
 /// Fixed so the popover's anchor point doesn't shift each time today's cost changes.
