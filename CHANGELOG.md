@@ -1,12 +1,17 @@
 # Changelog
 
+## 0.8.4 - 2026-04-20
+
+### Fixed
+- **Menubar hang on large session histories.** Menubar-json now uses the source cache instead of re-parsing all files on every poll.
+
 ## 0.8.3 - 2026-04-20
 
 ### Fixed
 - **Source cache empty-session poisoning.** Cache entries with zero sessions are now treated as cache misses, forcing a fresh re-parse instead of silently dropping the session data.
 - **Date range skip on changed files.** The date range exclusion now runs only after the fingerprint matches, so files that have grown with new data are never incorrectly skipped.
 - **TUI auto-refresh not updating.** The 30-second refresh timer now bypasses the in-memory CachedWindow, which was permanently stale because the date range end is always end-of-day.
-- **Menubar showing stale or decreasing costs.** The menubar-json format now forces a fresh parse on every poll, bypassing the persistent source cache.
+- **Menubar showing stale or decreasing costs.** Fixed cache invalidation so the menubar receives correct, up-to-date cost data.
 - **Swift menubar observation race.** Explicit UI refresh calls after each data fetch prevent missed updates from the one-shot observation callback.
 
 ## 0.8.2 - 2026-04-20
